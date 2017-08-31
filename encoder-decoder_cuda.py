@@ -57,7 +57,8 @@ class EncoderRNN(nn.Module):
     def initHidden(self):
         result = (autograd.Variable(torch.zeros(1, 1, self.hidden_size)),autograd.Variable(torch.zeros(1,1,self.hidden_size)))
         if use_cuda:
-            return result.cuda()
+            return (result[0].cuda(),result[1].cuda())
+            print  (result[0].cuda(),result[1].cuda())
         else:
             return result
 
@@ -83,7 +84,7 @@ class DecoderRNN(nn.Module):
     def initHidden(self):
         result = (autograd.Variable(torch.zeros(1, 1, self.hidden_size)),autograd.Variable(torch.zeros(1,1,self.hidden_size)))
         if use_cuda:
-            return result.cuda()
+            return (result[0].cuda(),result[1].cuda())
         else:
             return result
 
@@ -162,9 +163,10 @@ def trainIters(encoder, decoder, TRAINING_SIZE, print_every=10,learning_rate=0.0
     for i in range(TRAINING_SIZE):
         
         input_variable = sent2id(trainingList[i],word_to_index)
-        input_variable = input_varaible.cuda() if use_cuda else input_varaible
-        target_variable =torch.cat((sent2id(trainingList[i],word_to_index)[1:],torch.LongTensor([word_to_index["SENT_END"]])),0)
-        target_variable = target_varaible.cuda() if use_cuda else target_varaible 
+        input_variable= input_varaible.cuda() if use_cuda else input_varaible
+        target_variable=torch.cat((sent2id(trainingList[i],word_to_index)[1:],torch.LongTensor([word_to_index["SENT_END"]])),0)
+        target_variable= target_varaible.cuda() if use_cuda else target_varaible 
+ 
         loss = train(input_variable, target_variable, encoder,
                      decoder, encoder_optimizer, decoder_optimizer, criterion,target_variable.size()[0])
         print_loss_total += loss

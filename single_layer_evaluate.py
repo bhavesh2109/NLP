@@ -99,7 +99,8 @@ def perplexity():
     print 'Perplexity:', perplexity
 
     
-
+if __name__=="__main__":
+    perplexity()
 
 
 
