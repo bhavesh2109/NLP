@@ -23,7 +23,7 @@ trainingList=pickle.load(open("trainingList","rb"))
 testList=pickle.load(open("testList","rb"))
 word_to_index=pickle.load(open("word_to_index","rb"))
 index_to_word=pickle.load(open("index_to_word","rb"))
-MAX_LENGTH=15
+MAX_LENGTH=53
 
 
 def sent2id (sentence,word_to_index):
@@ -45,23 +45,64 @@ class EncoderRNN(nn.Module):
         self.hidden_size = hidden_size
 
         self.embedding = nn.Embedding(input_size, hidden_size)
-        self.LSTM = nn.LSTM(hidden_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
         embedded = self.embedding(input).view(1, 1, -1)
         output = embedded
         for i in range(self.n_layers):
-            output, hidden = self.LSTM(output, hidden)
+            output, hidden = self.gru(output, hidden)
         return output, hidden
 
     def initHidden(self):
-        result = (autograd.Variable(torch.zeros(1, 1, self.hidden_size)),autograd.Variable(torch.zeros(1,1,self.hidden_size)))
+        result = autograd.Variable(torch.zeros(1, 1, self.hidden_size))
         if use_cuda:
-            return (result[0].cuda(),result[1].cuda())
-            print  (result[0].cuda(),result[1].cuda())
+            return result.cuda()
         else:
             return result
 
+class AttnDecoderRNN(nn.Module):
+    def __init__(self, hidden_size, output_size, n_layers=1, dropout_p=0.1, max_length=MAX_LENGTH):
+        super(AttnDecoderRNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.dropout_p = dropout_p
+        self.max_length = max_length
+
+        self.embedding = nn.Embedding(self.output_size, self.hidden_size)
+        self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
+        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
+        self.dropout = nn.Dropout(self.dropout_p)
+        self.gru = nn.GRU(self.hidden_size, self.hidden_size)
+        self.out = nn.Linear(self.hidden_size, self.output_size)
+
+    def forward(self, input, hidden, encoder_output, encoder_outputs):
+        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(embedded)
+
+        attn_weights = F.softmax(
+            self.attn(torch.cat((embedded[0], hidden[0]), 1)))
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0),
+                                 encoder_outputs.unsqueeze(0))
+
+        output = torch.cat((embedded[0], attn_applied[0]), 1)
+        output = self.attn_combine(output).unsqueeze(0)
+
+        for i in range(self.n_layers):
+            output = F.relu(output)
+            output, hidden = self.gru(output, hidden)
+
+        output = F.log_softmax(self.out(output[0]))
+        return output, hidden, attn_weights
+
+    def initHidden(self):
+        result = Variable(torch.zeros(1, 1, self.hidden_size))
+        if use_cuda:
+            return result.cuda()
+        else:
+            return result
+            
 class DecoderRNN(nn.Module):
     def __init__(self, hidden_size, output_size, n_layers=1):
         super(DecoderRNN, self).__init__()
@@ -119,8 +160,8 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
     if use_teacher_forcing:
         # Teacher forcing: Feed the target as the next input
         for di in range(target_length):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden)
+            decoder_output, decoder_hidden, decoder_attention = decoder(
+                decoder_input, decoder_hidden,encoder_output,encoder_outputs)
             loss += criterion(decoder_output, target_variable[di])   
             vec,index=torch.max(decoder_output,1)
 
@@ -129,8 +170,8 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
     else:
         # Without teacher forcing: use its own predictions as the next input
         for di in range(target_length):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden)
+            decoder_output, decoder_hidden,decoder_attention = decoder(
+                decoder_input, decoder_hidden,encoder_output,encoder_outputs)
             topv, topi = decoder_output.data.topk(1)
             ni = topi[0][0]
             
@@ -163,12 +204,12 @@ def trainIters(encoder, decoder, TRAINING_SIZE, print_every=10,learning_rate=0.0
     for i in range(TRAINING_SIZE):
         
         input_variable = sent2id(trainingList[i],word_to_index)
-        input_variable= input_varaible.cuda() if use_cuda else input_varaible
+        input_variable= input_variable.cuda() if use_cuda else input_variable
         target_variable=torch.cat((sent2id(trainingList[i],word_to_index)[1:],torch.LongTensor([word_to_index["SENT_END"]])),0)
-        target_variable= target_varaible.cuda() if use_cuda else target_varaible 
+        target_variable= target_variable.cuda() if use_cuda else target_variable 
  
         loss = train(input_variable, target_variable, encoder,
-                     decoder, encoder_optimizer, decoder_optimizer, criterion,target_variable.size()[0])
+                     decoder, encoder_optimizer, decoder_optimizer, criterion,max_length=53)
         print_loss_total += loss
 
 
@@ -181,13 +222,14 @@ def trainIters(encoder, decoder, TRAINING_SIZE, print_every=10,learning_rate=0.0
 if __name__ == '__main__':
     hidden_size = 256
     encoder1=EncoderRNN(len(word_to_index),hidden_size)
-    decoder1=DecoderRNN(hidden_size,len(word_to_index))
+#    decoder1=DecoderRNN(hidden_size,len(word_to_index))
+    attn_decoder1=AttnDecoderRNN(hidden_size,len(word_to_index),1,dropout_p=0.1,max_length=53)
 
     if use_cuda:
         encoder1 = encoder1.cuda()
-        decoder1 = decoder1.cuda()
+        attn_decoder1 = attn_decoder1.cuda()
 
-    trainIters(encoder1, decoder1, 40000, print_every=10)
+    trainIters(encoder1,attn_decoder1, 40000, print_every=10)
     torch.save(encoder1.state_dict(),'encoder1_1_layer.pkl')
     torch.save(decoder1.state_dict(),'decoder1_1_layer.pkl')
    
